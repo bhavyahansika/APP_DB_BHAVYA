@@ -1,0 +1,6 @@
+[
+  {"id":1,"register_no":"RA2411003011897","name":"Akshita","department":"Computer Science & Engineering","year":3,"email":"ak3456@srmist.edu.in","created_at":"2026-09-01T09:00:00Z"},
+  {"id":2,"register_no":"RA2611003011978","name":"Mourya","department":"Artificial Intelligence & Data Science","year":1,"email":"mk3457@srmist.edu.in","created_at":"2026-09-02T10:30:00Z"},
+  {"id":3,"register_no":"RA2511003011934","name":"Hansika","department":"Computer Science & Engineering","year":2,"email":"bk4536@srmist.edu.in","created_at":"2026-09-03T11:15:00Z"},
+  {"id":5,"register_no":"RA23110030118968","name":"Harshitha","department":"Computer Science & Engineering","year":4,"email":"hg4789@srmist.edu.in","created_at":"2026-11-02T10:17:46.667562500Z"}
+]

@@ -1,5 +1,10 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { supabase, isConfigured } from '../supabaseClient';
+import {
+  fetchStudentsApi,
+  createStudentApi,
+  updateStudentApi,
+  deleteStudentApi,
+} from '../api';
 import StudentModal from './StudentModal';
 import DeleteModal from './DeleteModal';
 import {
@@ -12,8 +17,7 @@ import {
   Users,
   AlertCircle,
   RefreshCw,
-  Database,
-  CheckCircle2,
+  Server,
 } from 'lucide-react';
 
 export default function StudentDatabaseScreen() {
@@ -21,76 +25,35 @@ export default function StudentDatabaseScreen() {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
+  const [backendOnline, setBackendOnline] = useState(true);
 
   // Modals state
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [studentToEdit, setStudentToEdit] = useState(null);
   const [studentToDelete, setStudentToDelete] = useState(null);
 
-  // Fetch all students directly from Supabase
-  const fetchStudents = useCallback(async () => {
-    if (!isConfigured) {
-      setErrorMessage(
-        'Supabase is not configured yet. Please check your VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY in .env.'
-      );
-      setLoading(false);
-      return;
-    }
-
+  // Fetch all students directly from Java Backend
+  const loadStudents = useCallback(async () => {
     try {
       setLoading(true);
       setErrorMessage('');
-
-      const { data, error } = await supabase
-        .from('students')
-        .select('*')
-        .order('created_at', { ascending: false });
-
-      if (error) {
-        throw error;
-      }
-
+      const data = await fetchStudentsApi();
       setStudents(data || []);
+      setBackendOnline(true);
     } catch (err) {
       console.error('Error fetching students:', err);
-      if (err.message && err.message.includes('relation "public.students" does not exist')) {
-        setErrorMessage(
-          'The "students" table has not been created yet in your Supabase project. Please execute the SQL in supabase/schema.sql using Supabase SQL Editor.'
-        );
-      } else {
-        setErrorMessage(err.message || 'Could not fetch student records.');
-      }
+      setBackendOnline(false);
+      setErrorMessage(
+        'Unable to reach Java Backend server at http://localhost:8080. Please ensure "java StudentServer.java" is running.'
+      );
     } finally {
       setLoading(false);
     }
   }, []);
 
-  // Set up real-time subscription & initial fetch
   useEffect(() => {
-    fetchStudents();
-
-    if (!isConfigured) return;
-
-    // Subscribe to real-time changes on the students table
-    const channel = supabase
-      .channel('realtime:students')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'students',
-        },
-        () => {
-          fetchStudents();
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [fetchStudents]);
+    loadStudents();
+  }, [loadStudents]);
 
   // Filter students based on Register Number or Name
   const filteredStudents = useMemo(() => {
@@ -99,7 +62,8 @@ export default function StudentDatabaseScreen() {
     return students.filter(
       (student) =>
         student.register_no?.toLowerCase().includes(q) ||
-        student.name?.toLowerCase().includes(q)
+        student.name?.toLowerCase().includes(q) ||
+        student.department?.toLowerCase().includes(q)
     );
   }, [students, searchQuery]);
 
@@ -107,41 +71,18 @@ export default function StudentDatabaseScreen() {
   const handleSaveStudent = async (formData) => {
     if (studentToEdit) {
       // UPDATE
-      const { error } = await supabase
-        .from('students')
-        .update({
-          register_no: formData.register_no,
-          name: formData.name,
-          department: formData.department,
-          year: formData.year,
-          email: formData.email,
-        })
-        .eq('id', studentToEdit.id);
-
-      if (error) throw error;
+      await updateStudentApi(studentToEdit.id, formData);
     } else {
-      // INSERT
-      const { error } = await supabase.from('students').insert([
-        {
-          register_no: formData.register_no,
-          name: formData.name,
-          department: formData.department,
-          year: formData.year,
-          email: formData.email,
-        },
-      ]);
-
-      if (error) throw error;
+      // CREATE
+      await createStudentApi(formData);
     }
-
-    await fetchStudents();
+    await loadStudents();
   };
 
   // Handle Delete Student
   const handleDeleteStudent = async (id) => {
-    const { error } = await supabase.from('students').delete().eq('id', id);
-    if (error) throw error;
-    await fetchStudents();
+    await deleteStudentApi(id);
+    await loadStudents();
   };
 
   return (
@@ -155,19 +96,29 @@ export default function StudentDatabaseScreen() {
             </div>
             <div className="brand-details">
               <h1>Student Database Management</h1>
-              <span>End-to-End PostgreSQL Web System</span>
+              <span>Java REST Backend & React Frontend</span>
             </div>
           </div>
 
           <div className="nav-actions">
-            <div className="teacher-badge" title="Supabase Database Status">
-              <span className="teacher-indicator" />
-              <span>Database Active</span>
+            <div
+              className="teacher-badge"
+              title="Java Backend Status"
+              style={{
+                borderColor: backendOnline ? 'var(--border-medium)' : 'var(--danger-border)',
+                background: backendOnline ? 'var(--bg-secondary)' : 'var(--danger-bg)',
+              }}
+            >
+              <span
+                className="teacher-indicator"
+                style={{ backgroundColor: backendOnline ? 'var(--success)' : 'var(--danger)' }}
+              />
+              <span>{backendOnline ? 'Java Server (8080) Online' : 'Java Server Offline'}</span>
             </div>
             <button
               type="button"
               className="icon-action-btn"
-              onClick={fetchStudents}
+              onClick={loadStudents}
               title="Refresh Data"
               style={{ width: 34, height: 34 }}
             >
@@ -183,7 +134,7 @@ export default function StudentDatabaseScreen() {
           <div className="header-top">
             <div className="title-section">
               <h2>Student Records Management</h2>
-              <p>Add, search, update, and manage all student database records in real time</p>
+              <p>Add, search, update, and manage all student database records via Java REST API</p>
             </div>
 
             <button
@@ -206,7 +157,7 @@ export default function StudentDatabaseScreen() {
               <input
                 type="text"
                 className="search-input"
-                placeholder="Search by Register No or Name..."
+                placeholder="Search by Register No, Name, or Dept..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
               />
@@ -248,7 +199,7 @@ export default function StudentDatabaseScreen() {
           {loading ? (
             <div className="loading-container">
               <div className="spinner" />
-              <span>Loading student records...</span>
+              <span>Loading student records from Java Backend...</span>
             </div>
           ) : filteredStudents.length === 0 ? (
             <div className="empty-state">
@@ -258,12 +209,12 @@ export default function StudentDatabaseScreen() {
               <h3>
                 {searchQuery
                   ? `No students found matching "${searchQuery}"`
-                  : 'No student records yet'}
+                  : 'No student records in database'}
               </h3>
               <p>
                 {searchQuery
-                  ? 'Check your register number or name query, or click clear to show all students.'
-                  : 'Get started by creating your first student record in the database.'}
+                  ? 'Check your search query or clear the filter to view all records.'
+                  : 'Get started by creating your first student record in the Java database.'}
               </p>
               {searchQuery ? (
                 <button

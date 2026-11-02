@@ -6,12 +6,25 @@ export default defineConfig({
   server: {
     port: 7000,
     strictPort: true,
-    host: true
+    host: true,
+    proxy: {
+      '/api': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+        secure: false,
+      },
+    },
   },
   preview: {
     port: 7000,
     strictPort: true,
-    host: true
-  }
+    host: true,
+    proxy: {
+      '/api': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+        secure: false,
+      },
+    },
+  },
 });
-
