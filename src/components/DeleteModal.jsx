@@ -68,3 +68,4 @@ export default function DeleteModal({ isOpen, onClose, onConfirm, student }) {
     </div>
   );
 }
+

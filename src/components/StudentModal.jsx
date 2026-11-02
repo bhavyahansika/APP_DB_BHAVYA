@@ -253,3 +253,4 @@ export default function StudentModal({ isOpen, onClose, onSave, studentToEdit })
     </div>
   );
 }
+

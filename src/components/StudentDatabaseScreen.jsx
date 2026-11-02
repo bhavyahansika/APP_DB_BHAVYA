@@ -1,10 +1,9 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { supabase, extractTeacherId } from '../supabaseClient';
+import { supabase, isConfigured } from '../supabaseClient';
 import StudentModal from './StudentModal';
 import DeleteModal from './DeleteModal';
 import {
   GraduationCap,
-  LogOut,
   Plus,
   Search,
   X,
@@ -13,9 +12,11 @@ import {
   Users,
   AlertCircle,
   RefreshCw,
+  Database,
+  CheckCircle2,
 } from 'lucide-react';
 
-export default function StudentDatabaseScreen({ session, onLogout }) {
+export default function StudentDatabaseScreen() {
   const [students, setStudents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
@@ -26,12 +27,16 @@ export default function StudentDatabaseScreen({ session, onLogout }) {
   const [studentToEdit, setStudentToEdit] = useState(null);
   const [studentToDelete, setStudentToDelete] = useState(null);
 
-  const teacherEmail = session?.user?.email || '';
-  const teacherIdDisplay = extractTeacherId(teacherEmail);
-  const teacherUuid = session?.user?.id;
-
-  // Fetch all students for the logged-in teacher
+  // Fetch all students directly from Supabase
   const fetchStudents = useCallback(async () => {
+    if (!isConfigured) {
+      setErrorMessage(
+        'Supabase is not configured yet. Please check your VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY in .env.'
+      );
+      setLoading(false);
+      return;
+    }
+
     try {
       setLoading(true);
       setErrorMessage('');
@@ -48,7 +53,13 @@ export default function StudentDatabaseScreen({ session, onLogout }) {
       setStudents(data || []);
     } catch (err) {
       console.error('Error fetching students:', err);
-      setErrorMessage(err.message || 'Could not fetch student records.');
+      if (err.message && err.message.includes('relation "public.students" does not exist')) {
+        setErrorMessage(
+          'The "students" table has not been created yet in your Supabase project. Please execute the SQL in supabase/schema.sql using Supabase SQL Editor.'
+        );
+      } else {
+        setErrorMessage(err.message || 'Could not fetch student records.');
+      }
     } finally {
       setLoading(false);
     }
@@ -58,7 +69,9 @@ export default function StudentDatabaseScreen({ session, onLogout }) {
   useEffect(() => {
     fetchStudents();
 
-    // Subscribe to changes on the students table
+    if (!isConfigured) return;
+
+    // Subscribe to real-time changes on the students table
     const channel = supabase
       .channel('realtime:students')
       .on(
@@ -69,7 +82,6 @@ export default function StudentDatabaseScreen({ session, onLogout }) {
           table: 'students',
         },
         () => {
-          // Re-fetch to guarantee state sync and RLS enforcement
           fetchStudents();
         }
       )
@@ -80,12 +92,14 @@ export default function StudentDatabaseScreen({ session, onLogout }) {
     };
   }, [fetchStudents]);
 
-  // Filter students based on Register Number
+  // Filter students based on Register Number or Name
   const filteredStudents = useMemo(() => {
-    const q = searchQuery.trim().toUpperCase();
+    const q = searchQuery.trim().toLowerCase();
     if (!q) return students;
-    return students.filter((student) =>
-      student.register_no?.toUpperCase().includes(q)
+    return students.filter(
+      (student) =>
+        student.register_no?.toLowerCase().includes(q) ||
+        student.name?.toLowerCase().includes(q)
     );
   }, [students, searchQuery]);
 
@@ -114,7 +128,6 @@ export default function StudentDatabaseScreen({ session, onLogout }) {
           department: formData.department,
           year: formData.year,
           email: formData.email,
-          teacher_id: teacherUuid,
         },
       ]);
 
@@ -141,25 +154,24 @@ export default function StudentDatabaseScreen({ session, onLogout }) {
               <GraduationCap size={18} />
             </div>
             <div className="brand-details">
-              <h1>Student Database Portal</h1>
-              <span>Teacher Academic Records</span>
+              <h1>Student Database Management</h1>
+              <span>End-to-End PostgreSQL Web System</span>
             </div>
           </div>
 
           <div className="nav-actions">
-            <div className="teacher-badge" title={teacherEmail}>
+            <div className="teacher-badge" title="Supabase Database Status">
               <span className="teacher-indicator" />
-              <span>{teacherIdDisplay}</span>
+              <span>Database Active</span>
             </div>
-
             <button
               type="button"
-              className="logout-btn"
-              onClick={onLogout}
-              title="Sign Out"
+              className="icon-action-btn"
+              onClick={fetchStudents}
+              title="Refresh Data"
+              style={{ width: 34, height: 34 }}
             >
-              <LogOut size={15} />
-              <span>Logout</span>
+              <RefreshCw size={15} />
             </button>
           </div>
         </div>
@@ -171,7 +183,7 @@ export default function StudentDatabaseScreen({ session, onLogout }) {
           <div className="header-top">
             <div className="title-section">
               <h2>Student Records Management</h2>
-              <p>Manage and track enrolled students under your department</p>
+              <p>Add, search, update, and manage all student database records in real time</p>
             </div>
 
             <button
@@ -194,7 +206,7 @@ export default function StudentDatabaseScreen({ session, onLogout }) {
               <input
                 type="text"
                 className="search-input"
-                placeholder="Search by Register Number..."
+                placeholder="Search by Register No or Name..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
               />
@@ -212,22 +224,13 @@ export default function StudentDatabaseScreen({ session, onLogout }) {
 
             <div className="stats-badges">
               <span className="stat-pill">
-                Total: <strong>{students.length}</strong>
+                Total Records: <strong>{students.length}</strong>
               </span>
               {searchQuery && (
                 <span className="stat-pill">
                   Matching: <strong>{filteredStudents.length}</strong>
                 </span>
               )}
-              <button
-                type="button"
-                className="icon-action-btn"
-                onClick={fetchStudents}
-                title="Refresh Records"
-                style={{ marginLeft: '0.25rem' }}
-              >
-                <RefreshCw size={14} />
-              </button>
             </div>
           </div>
         </div>
@@ -235,7 +238,7 @@ export default function StudentDatabaseScreen({ session, onLogout }) {
         {/* Error message */}
         {errorMessage && (
           <div className="error-banner" style={{ marginBottom: '1.25rem' }}>
-            <AlertCircle size={16} />
+            <AlertCircle size={18} style={{ flexShrink: 0 }} />
             <span>{errorMessage}</span>
           </div>
         )}
@@ -259,8 +262,8 @@ export default function StudentDatabaseScreen({ session, onLogout }) {
               </h3>
               <p>
                 {searchQuery
-                  ? 'Check your register number query or click clear to show all students.'
-                  : 'Get started by adding your first student record to the database.'}
+                  ? 'Check your register number or name query, or click clear to show all students.'
+                  : 'Get started by creating your first student record in the database.'}
               </p>
               {searchQuery ? (
                 <button
