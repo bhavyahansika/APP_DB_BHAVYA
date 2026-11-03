@@ -7,7 +7,6 @@ import java.net.InetSocketAddress;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
-import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
@@ -21,7 +20,11 @@ import java.util.regex.Pattern;
  *
  * Requirements: JDK 11+ (Uses built-in com.sun.net.httpserver, ZERO external dependencies)
  * Run: java StudentServer.java
- * Port: http://localhost:8080
+ * Ports:
+ *   - Web UI & API:  http://localhost:8080/
+ *   - REST API:      http://localhost:8080/api/students
+ *   - Health Check:  http://localhost:8080/api/health
+ *   - Dev Vite UI:   http://localhost:7000/
  * ==============================================================================
  */
 public class StudentServer {
@@ -39,18 +42,20 @@ public class StudentServer {
 
         // 2. Start HTTP server on port 8080
         HttpServer server = HttpServer.create(new InetSocketAddress(PORT), 0);
-        server.setExecutor(Executors.newVirtualThreadPerTaskExecutor()); // Virtual threads in Java 21+ or fixed pool
+        server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
 
         // Register handlers
         server.createContext("/api/students", new StudentsHandler());
         server.createContext("/api/health", new HealthHandler());
+        server.createContext("/", new StaticFileHandler());
 
         server.start();
         System.out.println("==========================================================");
-        System.out.println("🚀 Student Database Java Backend Server running on port " + PORT);
-        System.out.println("👉 API Base URL:  http://localhost:" + PORT + "/api/students");
-        System.out.println("👉 Health Check:  http://localhost:" + PORT + "/api/health");
-        System.out.println("👉 Data Storage:  " + new File(DATA_FILE).getAbsolutePath());
+        System.out.println("🚀 Student Database Java Server running on port " + PORT);
+        System.out.println("👉 Web Application: http://localhost:" + PORT + "/");
+        System.out.println("👉 API Base URL:    http://localhost:" + PORT + "/api/students");
+        System.out.println("👉 Health Check:    http://localhost:" + PORT + "/api/health");
+        System.out.println("👉 Data Storage:    " + new File(DATA_FILE).getAbsolutePath());
         System.out.println("==========================================================");
     }
 
@@ -90,29 +95,94 @@ public class StudentServer {
     }
 
     // ==============================================================================
+    // HTTP Handler: / (Serves Frontend Web App & Static Files)
+    // ==============================================================================
+    static class StaticFileHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            setCorsHeaders(exchange);
+            if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
+                exchange.sendResponseHeaders(204, -1);
+                return;
+            }
+
+            String path = exchange.getRequestURI().getPath();
+            if (path.startsWith("/api/")) {
+                sendResponse(exchange, 404, "{\"error\":\"API route not found\"}");
+                return;
+            }
+
+            File distDir = new File("dist");
+            File file;
+            if ("/".equals(path) || path.isEmpty()) {
+                file = new File(distDir, "index.html");
+            } else {
+                file = new File(distDir, path.startsWith("/") ? path.substring(1) : path);
+            }
+
+            if (file.exists() && file.isFile()) {
+                String mime = getMimeType(file.getName());
+                exchange.getResponseHeaders().set("Content-Type", mime);
+                exchange.sendResponseHeaders(200, file.length());
+                try (InputStream is = new FileInputStream(file); OutputStream os = exchange.getResponseBody()) {
+                    is.transferTo(os);
+                }
+            } else {
+                File indexFile = new File(distDir, "index.html");
+                if (indexFile.exists()) {
+                    exchange.getResponseHeaders().set("Content-Type", "text/html; charset=UTF-8");
+                    exchange.sendResponseHeaders(200, indexFile.length());
+                    try (InputStream is = new FileInputStream(indexFile); OutputStream os = exchange.getResponseBody()) {
+                        is.transferTo(os);
+                    }
+                } else {
+                    String html = "<!DOCTYPE html><html><head><title>Student Database</title></head>"
+                        + "<body style='font-family:sans-serif;text-align:center;padding:50px;'>"
+                        + "<h2>Student Database Server (Port " + PORT + ")</h2>"
+                        + "<p>The Web App is available at <a href='http://localhost:7000' style='font-size:18px;font-weight:bold;color:#000;'>http://localhost:7000</a></p>"
+                        + "<p><a href='/api/students'>View API Students JSON</a> | <a href='/api/health'>API Health</a></p>"
+                        + "</body></html>";
+                    byte[] bytes = html.getBytes(StandardCharsets.UTF_8);
+                    exchange.getResponseHeaders().set("Content-Type", "text/html; charset=UTF-8");
+                    exchange.sendResponseHeaders(200, bytes.length);
+                    try (OutputStream os = exchange.getResponseBody()) {
+                        os.write(bytes);
+                    }
+                }
+            }
+        }
+
+        private String getMimeType(String filename) {
+            String name = filename.toLowerCase();
+            if (name.endsWith(".html")) return "text/html; charset=UTF-8";
+            if (name.endsWith(".js")) return "application/javascript; charset=UTF-8";
+            if (name.endsWith(".css")) return "text/css; charset=UTF-8";
+            if (name.endsWith(".svg")) return "image/svg+xml";
+            if (name.endsWith(".png")) return "image/png";
+            if (name.endsWith(".json")) return "application/json; charset=UTF-8";
+            return "application/octet-stream";
+        }
+    }
+
+    // ==============================================================================
     // HTTP Handler: /api/students & /api/students/{id}
     // ==============================================================================
     static class StudentsHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
-            // Apply CORS headers to all responses
             setCorsHeaders(exchange);
-
             String method = exchange.getRequestMethod();
 
-            // Handle Preflight OPTIONS
             if ("OPTIONS".equalsIgnoreCase(method)) {
                 exchange.sendResponseHeaders(204, -1);
                 return;
             }
 
             String path = exchange.getRequestURI().getPath();
-            // Path can be /api/students or /api/students/{id}
             String[] segments = path.split("/");
 
             try {
                 if (segments.length == 3 && "students".equals(segments[2])) {
-                    // /api/students
                     if ("GET".equalsIgnoreCase(method)) {
                         handleGetStudents(exchange);
                     } else if ("POST".equalsIgnoreCase(method)) {
@@ -121,7 +191,6 @@ public class StudentServer {
                         sendResponse(exchange, 405, "{\"error\":\"Method not allowed\"}");
                     }
                 } else if (segments.length == 4 && "students".equals(segments[2])) {
-                    // /api/students/{id}
                     long id = Long.parseLong(segments[3]);
                     if ("GET".equalsIgnoreCase(method)) {
                         handleGetStudentById(exchange, id);
@@ -143,7 +212,6 @@ public class StudentServer {
             }
         }
 
-        // GET /api/students (optional ?search=...)
         private void handleGetStudents(HttpExchange exchange) throws IOException {
             String query = exchange.getRequestURI().getQuery();
             String searchTerm = "";
@@ -158,7 +226,6 @@ public class StudentServer {
             }
 
             List<Student> list = new ArrayList<>(studentMap.values());
-            // Sort by id descending (most recently created first)
             list.sort((a, b) -> Long.compare(b.id, a.id));
 
             List<String> jsonItems = new ArrayList<>();
@@ -175,7 +242,6 @@ public class StudentServer {
             sendResponse(exchange, 200, response);
         }
 
-        // GET /api/students/{id}
         private void handleGetStudentById(HttpExchange exchange, long id) throws IOException {
             Student s = studentMap.get(id);
             if (s == null) {
@@ -185,7 +251,6 @@ public class StudentServer {
             sendResponse(exchange, 200, s.toJson());
         }
 
-        // POST /api/students
         private void handleCreateStudent(HttpExchange exchange) throws IOException {
             String body = readRequestBody(exchange);
             Map<String, String> data = parseJson(body);
@@ -201,7 +266,6 @@ public class StudentServer {
                 year = Integer.parseInt(yearStr);
             } catch (NumberFormatException ignored) {}
 
-            // Validation
             if (regNo.isEmpty() || name.isEmpty() || department.isEmpty() || email.isEmpty()) {
                 sendResponse(exchange, 400, "{\"error\":\"All fields (register_no, name, department, year, email) are required.\"}");
                 return;
@@ -212,7 +276,6 @@ public class StudentServer {
                 return;
             }
 
-            // Check unique register number
             for (Student existing : studentMap.values()) {
                 if (existing.registerNo.equalsIgnoreCase(regNo)) {
                     sendResponse(exchange, 409, "{\"error\":\"A student with Register No '" + regNo + "' already exists in database.\"}");
@@ -228,7 +291,6 @@ public class StudentServer {
             sendResponse(exchange, 201, newStudent.toJson());
         }
 
-        // PUT /api/students/{id}
         private void handleUpdateStudent(HttpExchange exchange, long id) throws IOException {
             Student existing = studentMap.get(id);
             if (existing == null) {
@@ -260,7 +322,6 @@ public class StudentServer {
                 return;
             }
 
-            // Check unique register number conflict with other students
             for (Student s : studentMap.values()) {
                 if (s.id != id && s.registerNo.equalsIgnoreCase(regNo)) {
                     sendResponse(exchange, 409, "{\"error\":\"A student with Register No '" + regNo + "' already exists.\"}");
@@ -278,7 +339,6 @@ public class StudentServer {
             sendResponse(exchange, 200, existing.toJson());
         }
 
-        // DELETE /api/students/{id}
         private void handleDeleteStudent(HttpExchange exchange, long id) throws IOException {
             Student removed = studentMap.remove(id);
             if (removed == null) {
@@ -312,7 +372,6 @@ public class StudentServer {
     private static synchronized void loadDataFromFile() {
         File file = new File(DATA_FILE);
         if (!file.exists()) {
-            // Seed initial records if file does not exist
             seedInitialData();
             saveDataToFile();
             return;
@@ -405,7 +464,6 @@ public class StudentServer {
         }
     }
 
-    // Lightweight regex-based JSON parser for standard flat JSON objects
     public static Map<String, String> parseJson(String json) {
         Map<String, String> map = new HashMap<>();
         if (json == null || json.trim().isEmpty()) return map;
